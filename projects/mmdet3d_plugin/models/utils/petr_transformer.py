@@ -5,6 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
+from torch import Tensor
+from typing import Optional, Tuple
 
 from einops import rearrange
 from mmcv.cnn.bricks.drop import build_dropout
@@ -113,6 +115,67 @@ class PETRTransformer(BaseModule):
         memory = memory.reshape(n, h, w, bs, c).permute(3, 0, 4, 1, 2)
         return  out_dec, memory
 
+class CustomMultiheadAttention(nn.MultiheadAttention):
+
+    def __init__(self, embed_dim, num_heads, dropout=0., bias=True, add_bias_kv=False, add_zero_attn=False,
+                 kdim=None, vdim=None, batch_first=False, device=None, dtype=None, use_custom_modulation=False) -> None:
+
+        super().__init__(embed_dim, num_heads, dropout, bias, add_bias_kv, add_zero_attn,
+                         kdim, vdim, batch_first, device, dtype)
+        self.use_custom_modulation = use_custom_modulation
+
+        if self.use_custom_modulation:
+            self.alpha_mlp = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim // 2),
+            nn.ReLU(),
+            nn.Linear(embed_dim // 2, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
+                need_weights: bool = True, attn_mask: Optional[Tensor] = None, seprate_idx: int = 0) -> Tuple[Tensor, Optional[Tensor]]:
+
+        if self.batch_first:
+            query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
+
+        if not self._qkv_same_embed_dim:
+            attn_output, attn_output_weights = F.multi_head_attention_forward(
+                query, key, value, self.embed_dim, self.num_heads,
+                self.in_proj_weight, self.in_proj_bias,
+                self.bias_k, self.bias_v, self.add_zero_attn,
+                self.dropout, self.out_proj.weight, self.out_proj.bias,
+                training=self.training,
+                key_padding_mask=key_padding_mask, need_weights=need_weights,
+                attn_mask=attn_mask, use_separate_proj_weight=True,
+                q_proj_weight=self.q_proj_weight, k_proj_weight=self.k_proj_weight,
+                v_proj_weight=self.v_proj_weight)
+        else:
+            attn_output, attn_output_weights = F.multi_head_attention_forward(
+                query, key, value, self.embed_dim, self.num_heads,
+                self.in_proj_weight, self.in_proj_bias,
+                self.bias_k, self.bias_v, self.add_zero_attn,
+                self.dropout, self.out_proj.weight, self.out_proj.bias,
+                training=self.training,
+                key_padding_mask=key_padding_mask, need_weights=need_weights,
+                attn_mask=attn_mask)
+
+        if self.use_custom_modulation:
+            assert seprate_idx > 0
+            alpha = self.alpha_mlp(query) # N X B X 1
+            alpha = alpha.transpose(0, 1) # B X N X 1
+            mask = torch.ones_like(attn_output_weights) # B x N x M
+            modulator = torch.cat((mask[..., :seprate_idx] * alpha, mask[..., seprate_idx:] * (1 - alpha)), dim=-1)
+            attn_output_weights = attn_output_weights * modulator
+            attn_output_weights = attn_output_weights / (attn_output_weights.sum(dim=-1, keepdim=True) + 1e-8) # B x N x M
+            value_trans = value.transpose(0, 1)  # B x M x C
+            attn_output = torch.bmm(attn_output_weights, value_trans) # B x N x C
+            attn_output = attn_output.transpose(0, 1)  # N x B x C
+
+        if self.batch_first:
+            return attn_output.transpose(1, 0), attn_output_weights
+        else:
+            return attn_output, attn_output_weights
+
 @ATTENTION.register_module()
 class PETRMultiheadAttention(BaseModule):
     """A wrapper for ``torch.nn.MultiheadAttention``.
@@ -142,6 +205,7 @@ class PETRMultiheadAttention(BaseModule):
                  dropout_layer=dict(type='Dropout', drop_prob=0.),
                  init_cfg=None,
                  batch_first=False,
+                 use_custom_modulation=False,
                  **kwargs):
         super(PETRMultiheadAttention, self).__init__(init_cfg)
         if 'dropout' in kwargs:
@@ -157,8 +221,8 @@ class PETRMultiheadAttention(BaseModule):
         self.num_heads = num_heads
         self.batch_first = batch_first
 
-        self.attn = nn.MultiheadAttention(embed_dims, num_heads, attn_drop,
-                                          **kwargs)
+        self.attn = CustomMultiheadAttention(embed_dims, num_heads, attn_drop, use_custom_modulation=use_custom_modulation,
+                                             **kwargs)
 
         self.proj_drop = nn.Dropout(proj_drop)
         self.dropout_layer = build_dropout(
@@ -248,7 +312,8 @@ class PETRMultiheadAttention(BaseModule):
             key=key,
             value=value,
             attn_mask=attn_mask,
-            key_padding_mask=key_padding_mask)
+            key_padding_mask=key_padding_mask,
+            seprate_idx = kwargs['seprate_idx'])
 
         if self.batch_first:
             out = out.transpose(0, 1)
@@ -507,24 +572,13 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
                 attn_masks=None,
                 query_key_padding_mask=None,
                 key_padding_mask=None,
+                seprate_idx=0,
                 **kwargs
                 ):
         """Forward function for `TransformerCoder`.
         Returns:
             Tensor: forwarded results with shape [num_query, bs, embed_dims].
         """
-        # x = super(PETRTransformerDecoderLayer, self).forward(
-        #         query,
-        #         key=key,
-        #         value=value,
-        #         query_pos=query_pos,
-        #         key_pos=key_pos,
-        #         attn_masks=attn_masks,
-        #         query_key_padding_mask=query_key_padding_mask,
-        #         key_padding_mask=key_padding_mask,
-        #         )
-
-        # return x
     
         norm_index = 0
         attn_index = 0
@@ -574,6 +628,7 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
                     key_pos=key_pos,
                     attn_mask=attn_masks[attn_index],
                     key_padding_mask=key_padding_mask,
+                    seprate_idx=seprate_idx,
                     **kwargs)
                 attn_index += 1
                 identity = query
@@ -594,6 +649,7 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
                 attn_masks=None,
                 query_key_padding_mask=None,
                 key_padding_mask=None,
+                seprate_idx=0,
                 **kwargs
                 ):
         """Forward function for `TransformerCoder`.
@@ -612,6 +668,7 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
                 attn_masks,
                 query_key_padding_mask,
                 key_padding_mask,
+                seprate_idx
                 )
         else:
             x, attn_weight = self._forward(
@@ -622,7 +679,8 @@ class PETRTransformerDecoderLayer(BaseTransformerLayer):
             key_pos=key_pos,
             attn_masks=attn_masks,
             query_key_padding_mask=query_key_padding_mask,
-            key_padding_mask=key_padding_mask
+            key_padding_mask=key_padding_mask,
+            seprate_idx=seprate_idx
             )
-        
+
         return x, attn_weight

@@ -10,7 +10,7 @@ roi_srides = [16]
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+point_cloud_range = [-54.0, -54.0, -5.0, 54.0, 54.0, 3.0]
 voxel_size = [0.2, 0.2, 8]
 img_norm_cfg = dict(
     mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.395], to_rgb=False)
@@ -291,8 +291,8 @@ db_sampler = dict(
         use_dim=[0, 1, 2, 3, 4],
         file_client_args=file_client_args))
 ida_aug_conf = {
-        "resize_lim": (0.47, 0.625),
-        "final_dim": (320, 800),
+        "resize_lim": (0.94, 1.25),
+        "final_dim": (640, 1600),
         "bot_pct_lim": (0.0, 0.0),
         "rot_lim": (0.0, 0.0),
         "H": 900,
@@ -452,5 +452,5 @@ workflow = [('train', 1)]
 gpu_ids = range(0, 8)
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from='ckpts/camera_vov_1600x640_2d_pretrain.pth'
+load_from='ckpts/camera_vov_800x320_2d_pretrain.pth'
 resume_from=None

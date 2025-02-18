@@ -737,6 +737,7 @@ class ICFusionHead(BaseModule):
     def get_query_init(self, ref_points, sparse_feature, feature_pos, feature_batch_inds):
         total_range = self.pc_range[3]-self.pc_range[0]
         radius = 1
+        init_query_topk = 1
         diameter = (2 * radius + 1)/total_range
         sigma = diameter / 6
         query_feature_list = []
@@ -750,13 +751,13 @@ class ICFusionHead(BaseModule):
             with torch.no_grad():
                 dis_mat = sample_q.unsqueeze(1) - sample_pos.unsqueeze(0)
                 dis_mat = -(dis_mat ** 2).sum(-1)
-                nearest_dis_topk,nearest_order_topk = dis_mat.topk(1 ,dim=1,sorted= True)
+                nearest_dis_topk,nearest_order_topk = dis_mat.topk(init_query_topk ,dim=1,sorted= True)
                 gaussian_weight = torch.exp( nearest_dis_topk / (2 * sigma * sigma))
-                gaussian_weight_sum = torch.clip(gaussian_weight.sum(-1),1)
+                gaussian_weight_sum = gaussian_weight.sum(-1)
             
-            flatten_order = nearest_order_topk.view(-1, 1)
-            flatten_weight = (gaussian_weight/gaussian_weight_sum.unsqueeze(1)).view(-1, 1)
-            feature = (sample_token.gather(0, flatten_order.repeat(1,sample_token.shape[1]))*flatten_weight).view(-1,1,sample_token.shape[1]).sum(1).unsqueeze(0)
+            flatten_order = nearest_order_topk.view(-1, init_query_topk)
+            flatten_weight = (gaussian_weight/gaussian_weight_sum.unsqueeze(1)).view(-1, init_query_topk)
+            feature = (sample_token.gather(0, flatten_order.repeat(1,sample_token.shape[1]))*flatten_weight).view(-1,init_query_topk,sample_token.shape[1]).sum(1).unsqueeze(0)
             query_feature_list.append(feature)
         
         query_feature = torch.cat(query_feature_list,dim=0)
@@ -824,7 +825,7 @@ class ICFusionHead(BaseModule):
             torch.full((*query_pos.shape[:-1], 1), 0.5, device=query_pos.device)
         ], dim=-1)  # 形状：[batch_size, num_3d_proposals, 3]
 
-        query_init = self.get_query_init(init_reference_points, x_feature, x_pos_embeds, x_batch_indices)
+        query_init = self.get_query_init(init_reference_points, x_feature, x_2dpos, x_batch_indices)
 
         reference_points = reference_points.unsqueeze(0).repeat(batch_size, 1, 1)
         reference_points = torch.cat([init_reference_points, reference_points], dim=1)

@@ -261,7 +261,7 @@ model = dict(
         separate_head=dict(
             type='SeparateTaskHead', init_bias=-2.19, final_kernel=1),
         transformer=dict(
-            type='CmtTransformer',
+            type='ICFusionTransformer',
             decoder=dict(
                 type='PETRTransformerDecoder',
                 return_intermediate=True,

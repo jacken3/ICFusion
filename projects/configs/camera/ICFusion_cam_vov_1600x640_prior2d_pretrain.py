@@ -293,7 +293,7 @@ test_pipeline = [
 ]
 
 data = dict(
-    samples_per_gpu=4,
+    samples_per_gpu=1,
     workers_per_gpu=6,
     train=dict(
         type=dataset_type,
@@ -334,7 +334,7 @@ data = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=8e-4,
+    lr=2e-4,
     paramwise_cfg=dict(
         custom_keys={
             'img_backbone': dict(lr_mult=0.1),

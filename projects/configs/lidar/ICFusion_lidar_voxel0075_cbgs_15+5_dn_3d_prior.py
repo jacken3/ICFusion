@@ -210,7 +210,7 @@ model = dict(
             voxel_size=voxel_size,
             num_classes=10), 
         transformer=dict(
-            type='CmtTransformer',
+            type='ICFusionTransformer',
             decoder=dict(
                 type='PETRTransformerDecoder',
                 return_intermediate=True,
@@ -224,7 +224,7 @@ model = dict(
                             num_heads=8,
                             dropout=0.1),
                         dict(
-                            type='PETRMultiheadFlashAttention',
+                            type='PETRMultiheadAttention',
                             embed_dims=256,
                             num_heads=8,
                             dropout=0.1),

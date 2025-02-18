@@ -195,7 +195,7 @@ model = dict(
             ),
         ),
         transformer=dict(
-            type='CmtTransformer',
+            type='ICFusionTransformer',
             decoder=dict(
                 type='PETRTransformerDecoder',
                 return_intermediate=True,
